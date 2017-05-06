@@ -35,6 +35,7 @@ class PlotlyPanelCtrl extends MetricsPanelCtrl {
         type: 'scatter',
         mode: 'lines+markers',
         displayModeBar: false,
+        showLegend: false,
         line: {
           color : '#005f81',
           width : 6,
@@ -55,6 +56,7 @@ class PlotlyPanelCtrl extends MetricsPanelCtrl {
           },
           showscale: true
         },
+        groupToSeries: '',
         color_option: 'ramp'
       },
       layout: {
@@ -162,7 +164,6 @@ class PlotlyPanelCtrl extends MetricsPanelCtrl {
   }
 
   onPanelInitalized() {
-    this.onConfigChanged();
   }
 
   onRender() {
@@ -178,18 +179,28 @@ class PlotlyPanelCtrl extends MetricsPanelCtrl {
       }
 
       var data = [this.trace];
+      if (this.trace.constructor === Array) {
+        data = this.trace;
+      }
+
       var rect = this.graph.getBoundingClientRect();
 
       var old = this.layout;
       this.layout = $.extend(true, {}, this.panel.pconfig.layout );
       this.layout.height = this.height;
       this.layout.width = rect.width;
+      this.layout.showlegend = s.showLegend;
       if(old) {
         this.layout.xaxis.title = old.xaxis.title;
         this.layout.yaxis.title = old.yaxis.title;
       }
 
       Plotly.newPlot(this.graph, data, this.layout, options);
+
+      data = [this.trace];
+      if (this.trace.constructor === Array) {
+        data = this.trace[0];
+      }
 
       this.graph.on('plotly_click', (data) => {
         for(var i=0; i < data.points.length; i++){
@@ -278,7 +289,62 @@ class PlotlyPanelCtrl extends MetricsPanelCtrl {
     if(dataList.length < 2) {
       console.log( "No data", dataList );
     }
+    else if (this.panel.pconfig.settings.groupToSeries.length > 0) {
+      let cfg = this.panel.pconfig;
+      let mapping = cfg.mapping;
+      this.data["@time"] = 1;
+      this.data["@index"] = 1;
+      for(let i=0; i<dataList.length; i++) {
+        this.data[dataList[i].target] = 1;
+      }
+
+      if(!mapping.x) mapping.x = dmapping.x;
+      if(!mapping.y) mapping.y = dmapping.y;
+
+      let indexForSeries = -1;
+      for(let i=0; i<dataList.length; i++) {
+        if (dataList[i].target == this.panel.pconfig.settings.groupToSeries) {
+          indexForSeries = i
+        } else if (!mapping.x) {
+          mapping.x = dataList[i].target;
+        } else if (!mapping.y) {
+          mapping.y = dataList[i].target;
+        }
+      }
+
+      let series = {};
+      for(let i=0; i<dataList.length; i++) {
+        if (i != indexForSeries) {
+          let xOrY = "x";
+          if (dataList[i].target == mapping.y) {
+            xOrY = "y";
+          }
+          let datapoints = dataList[i].datapoints;
+          for(var j=0; j<datapoints.length; j++) {
+            let seriesName = dataList[indexForSeries].datapoints[j][0];
+            if (!(seriesName in series)) {
+              series[seriesName] = { x: [], y: [], name: seriesName };
+              series[seriesName]["marker"] = $.extend(true, {}, cfg.settings.marker);
+              series[seriesName]["line"] = $.extend(true, {}, cfg.settings.line);
+              delete series[seriesName]["line"]["color"]
+              delete series[seriesName]["marker"]["color"]
+              if(mapping.size) {
+                var dS = this.data[mapping.size];
+                if(!dS) {
+                  throw { message: "Unable to find Size: "+mapping.size };
+                }
+                series[seriesName]["marker"].size = dS.points;
+              }
+            }
+            series[seriesName][xOrY].push(datapoints[j][0]);
+          }
+        }
+      }
+
+      this.trace = Object.keys(series).map(function(v) { return series[v]; });
+    }
     else {
+      this.trace = { };
       let dmapping = {
         x:null,
         y:null,
@@ -426,6 +492,7 @@ class PlotlyPanelCtrl extends MetricsPanelCtrl {
 
       console.log( "TRACE", this.trace );
     }
+    this.initalized = false;
     this.render();
   }
 
@@ -438,8 +505,16 @@ class PlotlyPanelCtrl extends MetricsPanelCtrl {
     }
 
     var cfg = this.panel.pconfig;
-    this.trace.type = cfg.settings.type;
-    this.trace.mode = cfg.settings.mode;
+
+    if (this.trace.constructor === Array) {
+      for(let i=0; i<this.trace.length; i++) {
+        this.trace[i].type = cfg.settings.type;
+        this.trace[i].mode = cfg.settings.mode;
+      }
+    } else {
+      this.trace.type = cfg.settings.type;
+      this.trace.mode = cfg.settings.mode;
+    }
 
     var axis = [ this.panel.pconfig.layout.xaxis, this.panel.pconfig.layout.yaxis];
     for(let i=0; i<axis.length; i++) {
